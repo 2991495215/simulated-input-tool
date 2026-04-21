@@ -52,38 +52,34 @@ try:
 except ImportError:
     HAS_PYSTRAY = False
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+def get_config_path():
+    if getattr(sys, 'frozen', False):
+        # 程序被打包成 exe
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # 普通 Python 脚本
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "config.json")
+
+CONFIG_FILE = get_config_path()
 DEFAULT_CONFIG = {
     "min_speed": 50,
     "max_speed": 150,
     "hotkey": "alt+v",
-    "stop_hotkey": "alt+b",
+    "stop_hotkey": "ctrl+a",
     "use_random_speed": True,
     "fixed_speed": 100,
     "hide_to_tray": True,
     "asked_hide_to_tray": False
 }
 
-CONFLICT_HOTKEYS = {
-    'ctrl+a': '全选',
-    'ctrl+c': '复制',
-    'ctrl+v': '粘贴',
-    'ctrl+x': '剪切',
-    'ctrl+z': '撤销',
-    'ctrl+s': '保存',
-    'ctrl+f': '查找',
-    'ctrl+p': '打印',
-    'alt+f4': '关闭窗口',
-    'alt+tab': '切换窗口',
-}
-
 class SimulatedInputApp:
     def __init__(self, root):
         self.root = root
         self.root.title("模拟输入工具")
-        self.root.geometry("480x620")
-        self.root.resizable(False, False)
-        self.root.configure(bg='#ffffff')
+        self.root.geometry("620x680")
+        self.root.resizable(True, True)
+        self.root.configure(bg='#eef2f7')
         
         self.config = self.load_config()
         self.is_typing = False
@@ -132,23 +128,147 @@ class SimulatedInputApp:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存配置失败: {e}")
+
+    def button_style(self, kind="primary"):
+        styles = {
+            "primary": ("#0f766e", "#ffffff", "#115e59"),
+            "success": ("#15803d", "#ffffff", "#166534"),
+            "danger": ("#dc2626", "#ffffff", "#b91c1c"),
+            "muted": ("#475569", "#ffffff", "#334155"),
+            "light": ("#e5e7eb", "#111827", "#d1d5db"),
+        }
+        bg, fg, active_bg = styles.get(kind, styles["primary"])
+        return {
+            "font": ('Microsoft YaHei', 10, 'bold'),
+            "bg": bg,
+            "fg": fg,
+            "activebackground": active_bg,
+            "activeforeground": fg,
+            "relief": "flat",
+            "bd": 0,
+            "padx": 14,
+            "pady": 7,
+            "cursor": "hand2",
+        }
+
+    def create_card(self, parent, pady=(0, 14)):
+        frame = tk.Frame(
+            parent,
+            bg='#ffffff',
+            highlightbackground='#d7dde8',
+            highlightthickness=1,
+            padx=16,
+            pady=12
+        )
+        frame.pack(fill=tk.X, pady=pady)
+        return frame
+
+    def create_section_title(self, parent, title, hint=None):
+        tk.Label(
+            parent,
+            text=title,
+            font=('Microsoft YaHei', 12, 'bold'),
+            bg='#ffffff',
+            fg='#111827'
+        ).pack(anchor=tk.W)
+        if hint:
+            tk.Label(
+                parent,
+                text=hint,
+                font=('Microsoft YaHei', 9),
+                bg='#ffffff',
+                fg='#64748b',
+                wraplength=450,
+                justify=tk.LEFT
+            ).pack(anchor=tk.W, pady=(4, 8))
+        else:
+            tk.Frame(parent, height=6, bg='#ffffff').pack(fill=tk.X)
+
+    def create_entry(self, parent, variable, width=10):
+        return tk.Entry(
+            parent,
+            textvariable=variable,
+            width=width,
+            font=('Microsoft YaHei', 11),
+            bg='#f8fafc',
+            fg='#111827',
+            relief='flat',
+            bd=0,
+            highlightthickness=1,
+            highlightbackground='#cbd5e1',
+            highlightcolor='#0f766e',
+            insertbackground='#0f766e'
+        )
+
+    def update_scroll_region(self, event=None):
+        self.content_canvas.configure(scrollregion=self.content_canvas.bbox("all"))
+
+    def sync_scroll_width(self, event):
+        self.content_canvas.itemconfigure(self.scroll_window, width=event.width)
+
+    def on_mousewheel(self, event):
+        self.content_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
     def setup_ui(self):
-        header = tk.Frame(self.root, bg='#2563eb', height=120)
+        header = tk.Frame(self.root, bg='#111827', height=92)
         header.pack(fill=tk.X)
+        header.pack_propagate(False)
         
-        title_label = tk.Label(header, text="⌨ 模拟输入工具", 
-                               font=('Microsoft YaHei', 24, 'bold'),
-                               bg='#2563eb', fg='white')
-        title_label.pack(pady=(25, 5))
+        title_label = tk.Label(
+            header,
+            text="模拟输入工具",
+            font=('Microsoft YaHei', 22, 'bold'),
+            bg='#111827',
+            fg='#f9fafb'
+        )
+        title_label.pack(anchor=tk.W, padx=24, pady=(12, 4))
         
-        subtitle = tk.Label(header, text="从剪贴板读取文本并模拟键盘输入", 
-                            font=('Microsoft YaHei', 10),
-                            bg='#2563eb', fg='#dbeafe')
-        subtitle.pack()
+        subtitle = tk.Label(
+            header,
+            text="复制文本，按快捷键，逐字符写入当前输入框。",
+            font=('Microsoft YaHei', 10),
+            bg='#111827',
+            fg='#cbd5e1'
+        )
+        subtitle.pack(anchor=tk.W, padx=26)
         
-        main_container = tk.Frame(self.root, bg='#f8fafc')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        body = tk.Frame(self.root, bg='#eef2f7')
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(12, 10))
+
+        self.content_canvas = tk.Canvas(
+            body,
+            bg='#eef2f7',
+            highlightthickness=0,
+            bd=0
+        )
+        scrollbar = tk.Scrollbar(body, orient=tk.VERTICAL, command=self.content_canvas.yview)
+        self.content_canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.content_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        main_container = tk.Frame(self.content_canvas, bg='#eef2f7')
+        self.scroll_window = self.content_canvas.create_window((0, 0), window=main_container, anchor=tk.NW)
+        main_container.bind("<Configure>", self.update_scroll_region)
+        self.content_canvas.bind("<Configure>", self.sync_scroll_width)
+        self.content_canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+
+        guide = tk.Frame(main_container, bg='#dff7ef', highlightbackground='#a7f3d0', highlightthickness=1, padx=14, pady=8)
+        guide.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(
+            guide,
+            text=f"开始: {self.config.get('hotkey', 'alt+v')}    停止: {self.config.get('stop_hotkey', 'ctrl+a')}",
+            font=('Microsoft YaHei', 10, 'bold'),
+            bg='#dff7ef',
+            fg='#064e3b'
+        ).pack(anchor=tk.W)
+        tk.Label(
+            guide,
+            text="先复制要输入的内容，再把光标放到目标位置。",
+            font=('Microsoft YaHei', 9),
+            bg='#dff7ef',
+            fg='#047857'
+        ).pack(anchor=tk.W, pady=(2, 0))
         
         self.create_speed_section(main_container)
         self.create_hotkey_section(main_container)
@@ -157,72 +277,63 @@ class SimulatedInputApp:
         self.create_button_section(main_container)
     
     def create_speed_section(self, parent):
-        frame = tk.Frame(parent, bg='white', highlightbackground='#e2e8f0', 
-                         highlightthickness=1, padx=20, pady=15)
-        frame.pack(fill=tk.X, pady=(0, 12))
-        
-        header_frame = tk.Frame(frame, bg='white')
-        header_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        tk.Label(header_frame, text="⚡ 输入速度", font=('Microsoft YaHei', 11, 'bold'),
-                bg='white', fg='#1e293b').pack(side=tk.LEFT)
+        frame = self.create_card(parent)
+        self.create_section_title(frame, "输入速度", "随机速度更像人工输入；固定速度适合稳定复现。")
+
+        header_frame = tk.Frame(frame, bg='#ffffff')
+        header_frame.pack(fill=tk.X, pady=(0, 8))
         
         self.use_random_var = tk.BooleanVar(value=self.config.get("use_random_speed", True))
         random_check = tk.Checkbutton(header_frame, text="随机速度", 
                                       variable=self.use_random_var,
                                       command=self.on_random_toggle,
-                                      font=('Microsoft YaHei', 9),
-                                      bg='white', fg='#475569',
-                                      activebackground='white', activeforeground='#2563eb',
-                                      selectcolor='#dbeafe')
-        random_check.pack(side=tk.RIGHT)
+                                      font=('Microsoft YaHei', 10, 'bold'),
+                                      bg='#ffffff', fg='#0f766e',
+                                      activebackground='#ffffff', activeforeground='#0f766e',
+                                      selectcolor='#ccfbf1')
+        random_check.pack(anchor=tk.W)
         
-        speed_grid = tk.Frame(frame, bg='white')
+        speed_grid = tk.Frame(frame, bg='#ffffff')
         speed_grid.pack(fill=tk.X)
+        speed_grid.columnconfigure(1, weight=1)
+        speed_grid.columnconfigure(3, weight=1)
         
-        tk.Label(speed_grid, text="最小延迟 (ms):", font=('Microsoft YaHei', 9),
-                bg='white', fg='#475569').grid(row=0, column=0, sticky=tk.W, pady=4)
+        tk.Label(speed_grid, text="最小延迟", font=('Microsoft YaHei', 9),
+                bg='#ffffff', fg='#475569').grid(row=0, column=0, sticky=tk.W, pady=4)
         self.min_speed_var = tk.StringVar(value=str(self.config["min_speed"]))
-        self.min_speed_entry = tk.Entry(speed_grid, textvariable=self.min_speed_var, 
-                                       width=10, font=('Microsoft YaHei', 10),
-                                       bg='#f1f5f9', relief='flat', bd=0)
-        self.min_speed_entry.grid(row=0, column=1, padx=(8, 20), pady=4)
+        self.min_speed_entry = self.create_entry(speed_grid, self.min_speed_var)
+        self.min_speed_entry.grid(row=0, column=1, sticky=tk.EW, padx=(8, 18), pady=4, ipady=5)
         
-        tk.Label(speed_grid, text="最大延迟 (ms):", font=('Microsoft YaHei', 9),
-                bg='white', fg='#475569').grid(row=0, column=2, sticky=tk.W, pady=4)
+        tk.Label(speed_grid, text="最大延迟", font=('Microsoft YaHei', 9),
+                bg='#ffffff', fg='#475569').grid(row=0, column=2, sticky=tk.W, pady=4)
         self.max_speed_var = tk.StringVar(value=str(self.config["max_speed"]))
-        self.max_speed_entry = tk.Entry(speed_grid, textvariable=self.max_speed_var, 
-                                       width=10, font=('Microsoft YaHei', 10),
-                                       bg='#f1f5f9', relief='flat', bd=0)
-        self.max_speed_entry.grid(row=0, column=3, padx=(8, 0), pady=4)
+        self.max_speed_entry = self.create_entry(speed_grid, self.max_speed_var)
+        self.max_speed_entry.grid(row=0, column=3, sticky=tk.EW, padx=(8, 0), pady=4, ipady=5)
         
-        tk.Label(speed_grid, text="固定延迟 (ms):", font=('Microsoft YaHei', 9),
-                bg='white', fg='#475569').grid(row=1, column=0, sticky=tk.W, pady=4)
+        tk.Label(speed_grid, text="固定延迟", font=('Microsoft YaHei', 9),
+                bg='#ffffff', fg='#475569').grid(row=1, column=0, sticky=tk.W, pady=4)
         self.fixed_speed_var = tk.StringVar(value=str(self.config.get("fixed_speed", 100)))
-        self.fixed_speed_entry = tk.Entry(speed_grid, textvariable=self.fixed_speed_var, 
-                                         width=10, font=('Microsoft YaHei', 10),
-                                         bg='#f1f5f9', relief='flat', bd=0)
-        self.fixed_speed_entry.grid(row=1, column=1, padx=(8, 20), pady=4)
+        self.fixed_speed_entry = self.create_entry(speed_grid, self.fixed_speed_var)
+        self.fixed_speed_entry.grid(row=1, column=1, sticky=tk.EW, padx=(8, 18), pady=4, ipady=5)
+
+        tk.Label(speed_grid, text="单位: ms", font=('Microsoft YaHei', 9),
+                bg='#ffffff', fg='#94a3b8').grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=4)
         
         self.on_random_toggle()
     
     def create_hotkey_section(self, parent):
-        frame = tk.Frame(parent, bg='white', highlightbackground='#e2e8f0', 
-                         highlightthickness=1, padx=20, pady=15)
-        frame.pack(fill=tk.X, pady=(0, 12))
-        
-        tk.Label(frame, text="⌨ 快捷键设置", font=('Microsoft YaHei', 11, 'bold'),
-                bg='white', fg='#1e293b').pack(anchor=tk.W, pady=(0, 12))
+        frame = self.create_card(parent)
+        self.create_section_title(frame, "快捷键", "设置后会自动保存。建议避开系统常用快捷键。")
         
         self.create_hotkey_row(frame, "开始输入", lambda: self.config["hotkey"], self.start_set_start_hotkey)
         self.create_hotkey_row(frame, "停止输入", lambda: self.config["stop_hotkey"], self.start_set_stop_hotkey)
     
     def create_hotkey_row(self, parent, label, get_config, set_cmd):
-        row_frame = tk.Frame(parent, bg='white')
-        row_frame.pack(fill=tk.X, pady=6)
+        row_frame = tk.Frame(parent, bg='#ffffff')
+        row_frame.pack(fill=tk.X, pady=4)
         
         tk.Label(row_frame, text=label + ":", font=('Microsoft YaHei', 9), width=10, anchor=tk.W,
-                bg='white', fg='#475569').pack(side=tk.LEFT)
+                bg='#ffffff', fg='#475569').pack(side=tk.LEFT)
         
         var = tk.StringVar(value=get_config())
         if label == "开始输入":
@@ -230,97 +341,78 @@ class SimulatedInputApp:
         else:
             self.stop_hotkey_var = var
         
-        entry_frame = tk.Frame(row_frame, bg='#f1f5f9', padx=10, pady=6)
+        entry_frame = tk.Frame(row_frame, bg='#f8fafc', highlightbackground='#cbd5e1', highlightthickness=1, padx=12, pady=6)
         entry_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
-        tk.Label(entry_frame, textvariable=var, font=('Microsoft YaHei', 9),
-                bg='#f1f5f9', fg='#1e293b').pack(anchor=tk.W)
+        tk.Label(entry_frame, textvariable=var, font=('Microsoft YaHei', 10, 'bold'),
+                bg='#f8fafc', fg='#111827').pack(anchor=tk.W)
         
-        btn = tk.Button(row_frame, text="设置", command=set_cmd,
-                       font=('Microsoft YaHei', 9), bg='#2563eb', fg='white',
-                       relief='flat', padx=12, pady=5, cursor='hand2',
-                       activebackground='#1d4ed8', activeforeground='white')
+        btn = tk.Button(row_frame, text="设置", command=set_cmd, **self.button_style("light"))
         btn.pack(side=tk.LEFT)
     
     def create_tray_section(self, parent):
-        frame = tk.Frame(parent, bg='white', highlightbackground='#e2e8f0', 
-                         highlightthickness=1, padx=20, pady=15)
-        frame.pack(fill=tk.X, pady=(0, 12))
-        
-        tk.Label(frame, text="📥 托盘设置", font=('Microsoft YaHei', 11, 'bold'),
-                bg='white', fg='#1e293b').pack(anchor=tk.W, pady=(0, 10))
+        frame = self.create_card(parent)
+        self.create_section_title(frame, "托盘", "关闭窗口时可以继续在后台监听快捷键。")
         
         if HAS_PYSTRAY:
             self.hide_to_tray_var = tk.BooleanVar(value=self.config.get("hide_to_tray", True))
             tray_check = tk.Checkbutton(frame, text="关闭窗口时隐藏到系统托盘", 
                                         variable=self.hide_to_tray_var,
                                         command=self.on_tray_setting_change,
-                                        font=('Microsoft YaHei', 9),
-                                        bg='white', fg='#475569',
-                                        activebackground='white', activeforeground='#2563eb',
-                                        selectcolor='#dbeafe')
+                                        font=('Microsoft YaHei', 10),
+                                        bg='#ffffff', fg='#475569',
+                                        activebackground='#ffffff', activeforeground='#0f766e',
+                                        selectcolor='#ccfbf1')
             tray_check.pack(anchor=tk.W)
             
             tk.Label(frame, text="隐藏后可通过托盘图标恢复窗口或退出程序", 
-                    font=('Microsoft YaHei', 8), bg='white', fg='#94a3b8').pack(anchor=tk.W, pady=(5, 0))
+                    font=('Microsoft YaHei', 9), bg='#ffffff', fg='#94a3b8').pack(anchor=tk.W, pady=(4, 0))
         else:
             tk.Label(frame, text="⚠ 未安装 pystray 库，托盘功能不可用\n请运行: pip install pystray", 
-                    font=('Microsoft YaHei', 9), bg='white', fg='#dc2626').pack(anchor=tk.W)
+                    font=('Microsoft YaHei', 9), bg='#ffffff', fg='#dc2626').pack(anchor=tk.W)
     
     def create_status_section(self, parent):
-        frame = tk.Frame(parent, bg='#eff6ff', highlightbackground='#bfdbfe', 
-                         highlightthickness=1, padx=20, pady=15)
-        frame.pack(fill=tk.X, pady=(0, 15))
+        frame = tk.Frame(parent, bg='#172033', highlightbackground='#0f172a', 
+                         highlightthickness=1, padx=16, pady=12)
+        frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(frame, text="📊 状态", font=('Microsoft YaHei', 11, 'bold'),
-                bg='#eff6ff', fg='#1e40af').pack(anchor=tk.W, pady=(0, 8))
+        tk.Label(frame, text="当前状态", font=('Microsoft YaHei', 11, 'bold'),
+                bg='#172033', fg='#e5e7eb').pack(anchor=tk.W, pady=(0, 8))
         
         self.status_var = tk.StringVar(value="✓ 就绪 - 复制文本后按快捷键开始输入")
         self.status_label = tk.Label(frame, textvariable=self.status_var, 
-                                     font=('Microsoft YaHei', 9), bg='#eff6ff', fg='#1e3a8a',
-                                     wraplength=400, justify=tk.LEFT)
+                                     font=('Microsoft YaHei', 10), bg='#172033', fg='#a7f3d0',
+                                     wraplength=460, justify=tk.LEFT)
         self.status_label.pack(anchor=tk.W)
     
     def create_button_section(self, parent):
-        frame = tk.Frame(parent, bg='#f8fafc')
+        frame = tk.Frame(parent, bg='#eef2f7')
         frame.pack(fill=tk.X)
         
-        self.save_btn = tk.Button(frame, text="💾 保存设置", command=self.save_settings,
-                                  font=('Microsoft YaHei', 9, 'bold'), bg='#16a34a', fg='white',
-                                  relief='flat', padx=18, pady=8, cursor='hand2',
-                                  activebackground='#15803d', activeforeground='white')
+        self.save_btn = tk.Button(frame, text="保存设置", command=self.save_settings, **self.button_style("success"))
         self.save_btn.pack(side=tk.LEFT, padx=(0, 8))
         
-        self.test_btn = tk.Button(frame, text="🧪 测试输入", command=self.test_input,
-                                 font=('Microsoft YaHei', 9), bg='#2563eb', fg='white',
-                                 relief='flat', padx=18, pady=8, cursor='hand2',
-                                 activebackground='#1d4ed8', activeforeground='white')
+        self.test_btn = tk.Button(frame, text="测试输入", command=self.test_input, **self.button_style("primary"))
         self.test_btn.pack(side=tk.LEFT, padx=(0, 8))
         
-        self.stop_btn = tk.Button(frame, text="⏹ 停止输入", command=self.stop_typing,
-                                  font=('Microsoft YaHei', 9), bg='#dc2626', fg='white',
-                                  relief='flat', padx=18, pady=8, cursor='hand2',
-                                  activebackground='#b91c1c', activeforeground='white',
-                                  state=tk.DISABLED)
+        self.stop_btn = tk.Button(frame, text="停止输入", command=self.stop_typing,
+                                  state=tk.DISABLED, **self.button_style("danger"))
         self.stop_btn.pack(side=tk.LEFT)
         
         if HAS_PYSTRAY:
-            hide_btn = tk.Button(frame, text="📥 隐藏到托盘", command=self.hide_to_tray,
-                                 font=('Microsoft YaHei', 9), bg='#64748b', fg='white',
-                                 relief='flat', padx=18, pady=8, cursor='hand2',
-                                 activebackground='#475569', activeforeground='white')
+            hide_btn = tk.Button(frame, text="隐藏到托盘", command=self.hide_to_tray, **self.button_style("muted"))
             hide_btn.pack(side=tk.RIGHT)
     
     def on_random_toggle(self):
         use_random = self.use_random_var.get()
         if use_random:
-            self.min_speed_entry.config(state=tk.NORMAL, bg='#f1f5f9')
-            self.max_speed_entry.config(state=tk.NORMAL, bg='#f1f5f9')
-            self.fixed_speed_entry.config(state=tk.DISABLED, bg='#e2e8f0')
+            self.min_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
+            self.max_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
+            self.fixed_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
         else:
-            self.min_speed_entry.config(state=tk.DISABLED, bg='#e2e8f0')
-            self.max_speed_entry.config(state=tk.DISABLED, bg='#e2e8f0')
-            self.fixed_speed_entry.config(state=tk.NORMAL, bg='#f1f5f9')
+            self.min_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
+            self.max_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
+            self.fixed_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
     
     def on_tray_setting_change(self):
         self.config["hide_to_tray"] = self.hide_to_tray_var.get()
@@ -375,18 +467,6 @@ class SimulatedInputApp:
                     self.is_setting_hotkey = False
                     
                     new_hotkey_lower = new_hotkey.lower()
-                    if new_hotkey_lower in CONFLICT_HOTKEYS:
-                        conflict_name = CONFLICT_HOTKEYS[new_hotkey_lower]
-                        self.root.after(0, lambda: messagebox.showwarning(
-                            "快捷键冲突",
-                            f"快捷键 {new_hotkey.upper()} 与系统快捷键【{conflict_name}】冲突！\n\n"
-                            f"建议使用其他快捷键，如：\n"
-                            f"• Ctrl+Shift+V\n"
-                            f"• Alt+Shift+V\n"
-                            f"• F9 / F10\n\n"
-                            f"是否仍要使用此快捷键？",
-                            icon='warning'
-                        ))
                     
                     if self.setting_stop_hotkey:
                         if new_hotkey == self.config["hotkey"]:
@@ -418,16 +498,7 @@ class SimulatedInputApp:
                 self.stop_hotkey_hook = None
             
             start_hotkey = self.config.get("hotkey", "alt+v")
-            stop_hotkey = self.config.get("stop_hotkey", "alt+b")
-            
-            start_hotkey_lower = start_hotkey.lower()
-            stop_hotkey_lower = stop_hotkey.lower()
-            
-            warnings = []
-            if start_hotkey_lower in CONFLICT_HOTKEYS:
-                warnings.append(f"开始快捷键 {start_hotkey.upper()} 与【{CONFLICT_HOTKEYS[start_hotkey_lower]}】冲突")
-            if stop_hotkey_lower in CONFLICT_HOTKEYS:
-                warnings.append(f"停止快捷键 {stop_hotkey.upper()} 与【{CONFLICT_HOTKEYS[stop_hotkey_lower]}】冲突")
+            stop_hotkey = self.config.get("stop_hotkey", "ctrl+a")
             
             self.start_hotkey_hook = keyboard.add_hotkey(
                 start_hotkey, 
@@ -437,12 +508,8 @@ class SimulatedInputApp:
                 stop_hotkey, 
                 self.stop_typing
             )
-            
-            if warnings:
-                self.status_var.set(f"⚠ {'; '.join(warnings)}")
-                print(f"快捷键警告: {'; '.join(warnings)}")
-            else:
-                self.status_var.set(f"✓ 就绪 - 开始: {start_hotkey}, 停止: {stop_hotkey}")
+
+            self.status_var.set(f"✓ 就绪 - 开始: {start_hotkey}, 停止: {stop_hotkey}")
             print(f"快捷键已注册: 开始={start_hotkey}, 停止={stop_hotkey}")
         except Exception as e:
             error_msg = str(e)
@@ -488,11 +555,18 @@ class SimulatedInputApp:
                 except ValueError:
                     fixed_speed = 100
             
+            # 释放所有修饰键，避免影响输入
+            for key in ['alt', 'ctrl', 'shift', 'win']:
+                if keyboard.is_pressed(key):
+                    keyboard.release(key)
+                    time.sleep(0.1)
+            
             for char in text:
                 if not self.is_typing:
                     break
                     
-                keyboard.write(char)
+                # 逐字符按文本写入，避免 @、大写字母等字符被当作按键名解析
+                keyboard.write(char, delay=0, exact=True)
                 
                 if use_random:
                     delay = random.randint(min_speed, max_speed) / 1000.0
@@ -544,7 +618,7 @@ class SimulatedInputApp:
         def create_image():
             width = 64
             height = 64
-            color1 = (37, 99, 235)
+            color1 = (15, 118, 110)
             color2 = (255, 255, 255)
             image = Image.new('RGB', (width, height), color2)
             dc = ImageDraw.Draw(image)
