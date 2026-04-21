@@ -1,6 +1,7 @@
 import ctypes
 import sys
 import os
+from ctypes import wintypes
 
 def is_admin():
     try:
@@ -419,6 +420,48 @@ class SimulatedInputApp:
         self.save_config()
         status = "启用" if self.config["hide_to_tray"] else "禁用"
         self.status_var.set(f"✓ 托盘设置已{status}并保存")
+
+    def send_unicode_char(self, char):
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+            ]
+
+        class INPUTUNION(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [
+                ("type", wintypes.DWORD),
+                ("union", INPUTUNION),
+            ]
+
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_KEYUP = 0x0002
+        KEYEVENTF_UNICODE = 0x0004
+
+        def send_unit(unit):
+            extra = ctypes.pointer(wintypes.ULONG(0))
+            inputs = (INPUT * 2)(
+                INPUT(INPUT_KEYBOARD, INPUTUNION(KEYBDINPUT(0, unit, KEYEVENTF_UNICODE, 0, extra))),
+                INPUT(INPUT_KEYBOARD, INPUTUNION(KEYBDINPUT(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, extra))),
+            )
+            sent = ctypes.windll.user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+            if sent != 2:
+                raise ctypes.WinError()
+
+        codepoint = ord(char)
+        if codepoint <= 0xFFFF:
+            send_unit(codepoint)
+            return
+
+        codepoint -= 0x10000
+        send_unit(0xD800 + (codepoint >> 10))
+        send_unit(0xDC00 + (codepoint & 0x3FF))
     
     def start_set_start_hotkey(self):
         self.is_setting_hotkey = True
@@ -565,8 +608,7 @@ class SimulatedInputApp:
                 if not self.is_typing:
                     break
                     
-                # 逐字符按文本写入，避免 @、大写字母等字符被当作按键名解析
-                keyboard.write(char, delay=0, exact=True)
+                self.send_unicode_char(char)
                 
                 if use_random:
                     delay = random.randint(min_speed, max_speed) / 1000.0
