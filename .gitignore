@@ -34,8 +34,12 @@ env/
 
 # PyInstaller
 *.spec
+!/simulated-input-tool.spec
 build/
 dist/
+release/
+archive/
+tmp/
 
 # Config
 config.json

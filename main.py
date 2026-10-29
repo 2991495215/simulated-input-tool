@@ -1,6 +1,19 @@
 import ctypes
 import sys
 import os
+import importlib.util
+import subprocess
+
+def enable_dpi_awareness():
+    if sys.platform != 'win32':
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 def is_admin():
     try:
@@ -11,46 +24,46 @@ def is_admin():
 def run_as_admin():
     if sys.platform == 'win32':
         script = os.path.abspath(sys.argv[0])
-        params = ' '.join([script] + sys.argv[1:])
+        params = subprocess.list2cmdline(sys.argv[1:] if getattr(sys, 'frozen', False) else [script] + sys.argv[1:])
         try:
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
-            return True
+            return ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1) > 32
         except:
             return False
     return False
 
-if not is_admin():
-    print("需要管理员权限来监听全局键盘事件...")
-    if run_as_admin():
-        sys.exit(0)
-    else:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showwarning(
-            "权限不足",
-            "此程序需要管理员权限才能监听全局键盘事件！\n\n"
-            "请右键点击程序，选择「以管理员身份运行」"
-        )
-        root.destroy()
-        sys.exit(1)
-
 import tkinter as tk
-from tkinter import ttk, messagebox
-import keyboard
-import pyperclip
+from tkinter import messagebox, ttk, font as tkfont
 import threading
 import random
 import json
 import time
-from PIL import Image, ImageDraw
 
-try:
-    import pystray
-    HAS_PYSTRAY = True
-except ImportError:
-    HAS_PYSTRAY = False
+keyboard = None
+pyperclip = None
+pystray = None
+HAS_PYSTRAY = importlib.util.find_spec("pystray") is not None
+
+def load_keyboard():
+    global keyboard
+    if keyboard is None:
+        import keyboard as keyboard_module
+        keyboard = keyboard_module
+    return keyboard
+
+def load_pyperclip():
+    global pyperclip
+    if pyperclip is None:
+        import pyperclip as pyperclip_module
+        pyperclip = pyperclip_module
+    return pyperclip
+
+def load_tray():
+    global pystray
+    if pystray is None:
+        import pystray as pystray_module
+        pystray = pystray_module
+    from PIL import Image, ImageDraw
+    return pystray, Image, ImageDraw
 
 def get_config_path():
     if getattr(sys, 'frozen', False):
@@ -65,7 +78,7 @@ CONFIG_FILE = get_config_path()
 DEFAULT_CONFIG = {
     "min_speed": 50,
     "max_speed": 150,
-    "hotkey": "alt+v",
+    "hotkey": "ctrl+alt+v",
     "stop_hotkey": "ctrl+a",
     "use_random_speed": True,
     "fixed_speed": 100,
@@ -73,13 +86,40 @@ DEFAULT_CONFIG = {
     "asked_hide_to_tray": False
 }
 
+INSTANCE_MUTEX_NAME = r'Local\SimulatedInputTool.SingleInstance'
+
+def acquire_instance():
+    if sys.platform != 'win32':
+        return None
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateMutexExW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD)
+    kernel.CreateMutexExW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel.CreateMutexExW(None, INSTANCE_MUTEX_NAME, 0, 0x00100000)
+    error = ctypes.get_last_error()
+    if not handle:
+        raise ctypes.WinError(error)
+    if error == 183:
+        kernel.CloseHandle(handle)
+        user = ctypes.windll.user32
+        user.FindWindowW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
+        user.FindWindowW.restype = wintypes.HWND
+        user.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+        user.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        window = user.FindWindowW('TkTopLevel', '模拟输入工具')
+        if window:
+            user.ShowWindow(window, 9)
+            user.SetForegroundWindow(window)
+        return None
+    return handle
+
 class SimulatedInputApp:
     def __init__(self, root):
         self.root = root
         self.root.title("模拟输入工具")
-        self.root.geometry("620x680")
         self.root.resizable(True, True)
-        self.root.configure(bg='#eef2f7')
+        self.root.configure(bg='#f7f8fa')
         
         self.config = self.load_config()
         self.is_typing = False
@@ -94,15 +134,23 @@ class SimulatedInputApp:
         self.stop_hotkey_hook = None
         
         self.setup_ui()
+        self.root.update_idletasks()
+        width = self.root.winfo_reqwidth()
+        height = self.root.winfo_reqheight()
+        self.root.geometry(f'{width}x{height}')
+        self.root.minsize(width, height)
         
-        self.root.after(100, self.init_keyboard)
+        self.root.after_idle(self.initialize_background_features)
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
+    def initialize_background_features(self):
+        self.init_keyboard()
         if HAS_PYSTRAY:
             self.setup_tray()
     
     def init_keyboard(self):
+        load_keyboard()
         self.register_hotkeys()
     
     def load_config(self):
@@ -131,23 +179,23 @@ class SimulatedInputApp:
 
     def button_style(self, kind="primary"):
         styles = {
-            "primary": ("#0f766e", "#ffffff", "#115e59"),
-            "success": ("#15803d", "#ffffff", "#166534"),
+            "primary": ("#2563eb", "#ffffff", "#1d4ed8"),
+            "success": ("#0f766e", "#ffffff", "#115e59"),
             "danger": ("#dc2626", "#ffffff", "#b91c1c"),
-            "muted": ("#475569", "#ffffff", "#334155"),
-            "light": ("#e5e7eb", "#111827", "#d1d5db"),
+            "muted": ("#334155", "#ffffff", "#1e293b"),
+            "light": ("#e8eef7", "#1e293b", "#dbe5f2"),
         }
         bg, fg, active_bg = styles.get(kind, styles["primary"])
         return {
-            "font": ('Microsoft YaHei', 10, 'bold'),
+            "font": ('Microsoft YaHei UI', 10, 'bold'),
             "bg": bg,
             "fg": fg,
             "activebackground": active_bg,
             "activeforeground": fg,
             "relief": "flat",
             "bd": 0,
-            "padx": 14,
-            "pady": 7,
+            "padx": 15,
+            "pady": 8,
             "cursor": "hand2",
         }
 
@@ -155,10 +203,10 @@ class SimulatedInputApp:
         frame = tk.Frame(
             parent,
             bg='#ffffff',
-            highlightbackground='#d7dde8',
+            highlightbackground='#dbe4f0',
             highlightthickness=1,
-            padx=16,
-            pady=12
+            padx=18,
+            pady=14
         )
         frame.pack(fill=tk.X, pady=pady)
         return frame
@@ -210,120 +258,87 @@ class SimulatedInputApp:
         self.content_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
     def setup_ui(self):
-        header = tk.Frame(self.root, bg='#111827', height=92)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-        
-        title_label = tk.Label(
-            header,
-            text="模拟输入工具",
-            font=('Microsoft YaHei', 22, 'bold'),
-            bg='#111827',
-            fg='#f9fafb'
-        )
-        title_label.pack(anchor=tk.W, padx=24, pady=(12, 4))
-        
-        subtitle = tk.Label(
-            header,
-            text="复制文本，按快捷键，逐字符写入当前输入框。",
-            font=('Microsoft YaHei', 10),
-            bg='#111827',
-            fg='#cbd5e1'
-        )
-        subtitle.pack(anchor=tk.W, padx=26)
-        
-        body = tk.Frame(self.root, bg='#eef2f7')
-        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(12, 10))
+        self.font = ('Microsoft YaHei UI', 10)
+        self.font_small = ('Microsoft YaHei UI', 9)
+        self.font_title = ('Microsoft YaHei UI', 18, 'bold')
+        self.mono_font = ('Cascadia Mono', 10)
+        tkfont.nametofont('TkDefaultFont').configure(family=self.font[0], size=10)
+        tkfont.nametofont('TkTextFont').configure(family=self.font[0], size=10)
 
-        self.content_canvas = tk.Canvas(
-            body,
-            bg='#eef2f7',
-            highlightthickness=0,
-            bd=0
-        )
-        scrollbar = tk.Scrollbar(body, orient=tk.VERTICAL, command=self.content_canvas.yview)
-        self.content_canvas.configure(yscrollcommand=scrollbar.set)
+        style = ttk.Style(self.root)
+        style.theme_use('clam')
+        if sys.platform == 'win32':
+            style.element_create('App.Checkbutton.indicator', 'from', 'vista', 'Checkbutton.indicator')
+            style.layout('App.TCheckbutton', [('Checkbutton.padding', {'sticky': 'nswe', 'children': [
+                ('App.Checkbutton.indicator', {'side': 'left', 'sticky': ''}),
+                ('Checkbutton.focus', {'side': 'left', 'sticky': 'w', 'children': [
+                    ('Checkbutton.label', {'sticky': 'nswe'})
+                ]})
+            ]})])
+        style.configure('App.TFrame', background='#f7f8fa')
+        style.configure('Title.TLabel', background='#f7f8fa', foreground='#17202a', font=self.font_title)
+        style.configure('Muted.TLabel', background='#f7f8fa', foreground='#64748b', font=self.font_small)
+        style.configure('App.TCheckbutton', background='#ffffff', foreground='#334155', font=self.font)
+        style.map('App.TCheckbutton', background=[('active', '#ffffff')])
+        style.configure('App.TEntry', fieldbackground='#ffffff', foreground='#17202a', padding=(9, 6))
+        style.configure('Secondary.TButton', background='#eef2f6', foreground='#334155', padding=(12, 7), borderwidth=0, font=self.font)
+        style.map('Secondary.TButton', background=[('active', '#e2e8f0')])
+        style.configure('Primary.TButton', background='#0f6cbd', foreground='#ffffff', padding=(16, 9), borderwidth=0, font=('Microsoft YaHei UI', 10, 'bold'))
+        style.map('Primary.TButton', background=[('active', '#0b5da5')])
+        style.configure('Danger.TButton', background='#fff1f2', foreground='#be123c', padding=(12, 7), borderwidth=0, font=self.font)
+        style.map('Danger.TButton', background=[('active', '#ffe4e6')])
 
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.content_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        root_frame = ttk.Frame(self.root, style='App.TFrame', padding=(24, 20, 24, 18))
+        root_frame.pack(fill=tk.BOTH, expand=True)
+        root_frame.columnconfigure(0, weight=1)
 
-        main_container = tk.Frame(self.content_canvas, bg='#eef2f7')
-        self.scroll_window = self.content_canvas.create_window((0, 0), window=main_container, anchor=tk.NW)
-        main_container.bind("<Configure>", self.update_scroll_region)
-        self.content_canvas.bind("<Configure>", self.sync_scroll_width)
-        self.content_canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        ttk.Label(root_frame, text='模拟输入工具', style='Title.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(root_frame, text='复制文本后，用快捷键逐字符输入到当前光标位置', style='Muted.TLabel').grid(row=1, column=0, sticky='w', pady=(3, 16))
 
-        guide = tk.Frame(main_container, bg='#dff7ef', highlightbackground='#a7f3d0', highlightthickness=1, padx=14, pady=8)
-        guide.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(
-            guide,
-            text=f"开始: {self.config.get('hotkey', 'alt+v')}    停止: {self.config.get('stop_hotkey', 'ctrl+a')}",
-            font=('Microsoft YaHei', 10, 'bold'),
-            bg='#dff7ef',
-            fg='#064e3b'
-        ).pack(anchor=tk.W)
-        tk.Label(
-            guide,
-            text="先复制要输入的内容，再把光标放到目标位置。",
-            font=('Microsoft YaHei', 9),
-            bg='#dff7ef',
-            fg='#047857'
-        ).pack(anchor=tk.W, pady=(2, 0))
-        
-        self.create_speed_section(main_container)
-        self.create_hotkey_section(main_container)
-        self.create_tray_section(main_container)
-        self.create_status_section(main_container)
-        self.create_button_section(main_container)
+        guide = tk.Frame(root_frame, bg='#eaf3ff', highlightbackground='#cfe3fb', highlightthickness=1)
+        guide.grid(row=2, column=0, sticky='ew', pady=(0, 12))
+        guide.columnconfigure(1, weight=1)
+        tk.Label(guide, text='快捷操作', bg='#eaf3ff', fg='#0f6cbd', font=('Microsoft YaHei UI', 9, 'bold')).grid(row=0, column=0, padx=(12, 8), pady=10, sticky='w')
+        tk.Label(guide, text='复制文本后，将光标放到目标输入框', bg='#eaf3ff', fg='#1e3a5f', font=self.font_small).grid(row=0, column=1, padx=(0, 12), pady=10, sticky='w')
+
+        self.create_speed_section(root_frame, 3)
+        self.create_hotkey_section(root_frame, 4)
+        self.create_tray_section(root_frame, 5)
+        self.create_status_section(root_frame, 6)
+        self.create_button_section(root_frame, 7)
     
-    def create_speed_section(self, parent):
-        frame = self.create_card(parent)
-        self.create_section_title(frame, "输入速度", "随机速度更像人工输入；固定速度适合稳定复现。")
+    def create_speed_section(self, parent, row):
+        frame = tk.Frame(parent, bg='#ffffff', highlightbackground='#e5e7eb', highlightthickness=1, padx=14, pady=12)
+        frame.grid(row=row, column=0, sticky='ew', pady=(0, 10))
+        tk.Label(frame, text='输入速度', bg='#ffffff', fg='#17202a', font=('Microsoft YaHei UI', 11, 'bold')).grid(row=0, column=0, columnspan=4, sticky='w')
+        tk.Label(frame, text='随机速度更像人工输入；固定速度适合稳定复现。', bg='#ffffff', fg='#64748b', font=self.font_small).grid(row=1, column=0, columnspan=4, sticky='w', pady=(3, 9))
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
 
-        header_frame = tk.Frame(frame, bg='#ffffff')
-        header_frame.pack(fill=tk.X, pady=(0, 8))
-        
         self.use_random_var = tk.BooleanVar(value=self.config.get("use_random_speed", True))
-        random_check = tk.Checkbutton(header_frame, text="随机速度", 
-                                      variable=self.use_random_var,
-                                      command=self.on_random_toggle,
-                                      font=('Microsoft YaHei', 10, 'bold'),
-                                      bg='#ffffff', fg='#0f766e',
-                                      activebackground='#ffffff', activeforeground='#0f766e',
-                                      selectcolor='#ccfbf1')
-        random_check.pack(anchor=tk.W)
-        
-        speed_grid = tk.Frame(frame, bg='#ffffff')
-        speed_grid.pack(fill=tk.X)
-        speed_grid.columnconfigure(1, weight=1)
-        speed_grid.columnconfigure(3, weight=1)
-        
-        tk.Label(speed_grid, text="最小延迟", font=('Microsoft YaHei', 9),
-                bg='#ffffff', fg='#475569').grid(row=0, column=0, sticky=tk.W, pady=4)
-        self.min_speed_var = tk.StringVar(value=str(self.config["min_speed"]))
-        self.min_speed_entry = self.create_entry(speed_grid, self.min_speed_var)
-        self.min_speed_entry.grid(row=0, column=1, sticky=tk.EW, padx=(8, 18), pady=4, ipady=5)
-        
-        tk.Label(speed_grid, text="最大延迟", font=('Microsoft YaHei', 9),
-                bg='#ffffff', fg='#475569').grid(row=0, column=2, sticky=tk.W, pady=4)
-        self.max_speed_var = tk.StringVar(value=str(self.config["max_speed"]))
-        self.max_speed_entry = self.create_entry(speed_grid, self.max_speed_var)
-        self.max_speed_entry.grid(row=0, column=3, sticky=tk.EW, padx=(8, 0), pady=4, ipady=5)
-        
-        tk.Label(speed_grid, text="固定延迟", font=('Microsoft YaHei', 9),
-                bg='#ffffff', fg='#475569').grid(row=1, column=0, sticky=tk.W, pady=4)
-        self.fixed_speed_var = tk.StringVar(value=str(self.config.get("fixed_speed", 100)))
-        self.fixed_speed_entry = self.create_entry(speed_grid, self.fixed_speed_var)
-        self.fixed_speed_entry.grid(row=1, column=1, sticky=tk.EW, padx=(8, 18), pady=4, ipady=5)
+        ttk.Checkbutton(frame, text='随机速度', variable=self.use_random_var, command=self.on_random_toggle, style='App.TCheckbutton').grid(row=2, column=0, columnspan=4, sticky='w', pady=(0, 6))
 
-        tk.Label(speed_grid, text="单位: ms", font=('Microsoft YaHei', 9),
-                bg='#ffffff', fg='#94a3b8').grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=4)
+        tk.Label(frame, text='最小延迟', font=self.font_small, bg='#ffffff', fg='#475569').grid(row=3, column=0, sticky='w', pady=3)
+        self.min_speed_var = tk.StringVar(value=str(self.config["min_speed"]))
+        self.min_speed_entry = ttk.Entry(frame, textvariable=self.min_speed_var, style='App.TEntry', width=8)
+        self.min_speed_entry.grid(row=3, column=1, sticky='ew', padx=(8, 18), pady=3)
+        tk.Label(frame, text='最大延迟', font=self.font_small, bg='#ffffff', fg='#475569').grid(row=3, column=2, sticky='w', pady=3)
+        self.max_speed_var = tk.StringVar(value=str(self.config["max_speed"]))
+        self.max_speed_entry = ttk.Entry(frame, textvariable=self.max_speed_var, style='App.TEntry', width=8)
+        self.max_speed_entry.grid(row=3, column=3, sticky='ew', padx=(8, 0), pady=3)
+        tk.Label(frame, text='固定延迟', font=self.font_small, bg='#ffffff', fg='#475569').grid(row=4, column=0, sticky='w', pady=3)
+        self.fixed_speed_var = tk.StringVar(value=str(self.config.get("fixed_speed", 100)))
+        self.fixed_speed_entry = ttk.Entry(frame, textvariable=self.fixed_speed_var, style='App.TEntry', width=8)
+        self.fixed_speed_entry.grid(row=4, column=1, sticky='ew', padx=(8, 18), pady=3)
+        tk.Label(frame, text='单位：毫秒', font=self.font_small, bg='#ffffff', fg='#94a3b8').grid(row=4, column=2, columnspan=2, sticky='w', pady=3)
         
         self.on_random_toggle()
     
-    def create_hotkey_section(self, parent):
-        frame = self.create_card(parent)
-        self.create_section_title(frame, "快捷键", "设置后会自动保存。建议避开系统常用快捷键。")
+    def create_hotkey_section(self, parent, row):
+        frame = tk.Frame(parent, bg='#ffffff', highlightbackground='#e5e7eb', highlightthickness=1, padx=14, pady=12)
+        frame.grid(row=row, column=0, sticky='ew', pady=(0, 10))
+        tk.Label(frame, text='快捷键', bg='#ffffff', fg='#17202a', font=('Microsoft YaHei UI', 11, 'bold')).pack(anchor='w')
+        tk.Label(frame, text='设置后自动保存。建议避开系统常用快捷键。', bg='#ffffff', fg='#64748b', font=self.font_small).pack(anchor='w', pady=(3, 7))
         
         self.create_hotkey_row(frame, "开始输入", lambda: self.config["hotkey"], self.start_set_start_hotkey)
         self.create_hotkey_row(frame, "停止输入", lambda: self.config["stop_hotkey"], self.start_set_stop_hotkey)
@@ -332,7 +347,7 @@ class SimulatedInputApp:
         row_frame = tk.Frame(parent, bg='#ffffff')
         row_frame.pack(fill=tk.X, pady=4)
         
-        tk.Label(row_frame, text=label + ":", font=('Microsoft YaHei', 9), width=10, anchor=tk.W,
+        tk.Label(row_frame, text=label, font=self.font_small, width=9, anchor=tk.W,
                 bg='#ffffff', fg='#475569').pack(side=tk.LEFT)
         
         var = tk.StringVar(value=get_config())
@@ -341,78 +356,60 @@ class SimulatedInputApp:
         else:
             self.stop_hotkey_var = var
         
-        entry_frame = tk.Frame(row_frame, bg='#f8fafc', highlightbackground='#cbd5e1', highlightthickness=1, padx=12, pady=6)
+        entry_frame = tk.Frame(row_frame, bg='#f8fafc', highlightbackground='#dbe3ec', highlightthickness=1, padx=10, pady=5)
         entry_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
-        tk.Label(entry_frame, textvariable=var, font=('Microsoft YaHei', 10, 'bold'),
+        tk.Label(entry_frame, textvariable=var, font=self.mono_font,
                 bg='#f8fafc', fg='#111827').pack(anchor=tk.W)
-        
-        btn = tk.Button(row_frame, text="设置", command=set_cmd, **self.button_style("light"))
-        btn.pack(side=tk.LEFT)
+        ttk.Button(row_frame, text='修改', command=set_cmd, style='Secondary.TButton').pack(side=tk.LEFT)
     
-    def create_tray_section(self, parent):
-        frame = self.create_card(parent)
-        self.create_section_title(frame, "托盘", "关闭窗口时可以继续在后台监听快捷键。")
+    def create_tray_section(self, parent, row):
+        frame = tk.Frame(parent, bg='#ffffff', highlightbackground='#e5e7eb', highlightthickness=1, padx=14, pady=10)
+        frame.grid(row=row, column=0, sticky='ew', pady=(0, 10))
+        frame.columnconfigure(0, weight=1)
+        tk.Label(frame, text='托盘', bg='#ffffff', fg='#17202a', font=('Microsoft YaHei UI', 11, 'bold')).grid(row=0, column=0, sticky='w')
         
         if HAS_PYSTRAY:
             self.hide_to_tray_var = tk.BooleanVar(value=self.config.get("hide_to_tray", True))
-            tray_check = tk.Checkbutton(frame, text="关闭窗口时隐藏到系统托盘", 
-                                        variable=self.hide_to_tray_var,
-                                        command=self.on_tray_setting_change,
-                                        font=('Microsoft YaHei', 10),
-                                        bg='#ffffff', fg='#475569',
-                                        activebackground='#ffffff', activeforeground='#0f766e',
-                                        selectcolor='#ccfbf1')
-            tray_check.pack(anchor=tk.W)
-            
-            tk.Label(frame, text="隐藏后可通过托盘图标恢复窗口或退出程序", 
-                    font=('Microsoft YaHei', 9), bg='#ffffff', fg='#94a3b8').pack(anchor=tk.W, pady=(4, 0))
+            ttk.Checkbutton(frame, text='关闭窗口时隐藏到系统托盘', variable=self.hide_to_tray_var, command=self.on_tray_setting_change, style='App.TCheckbutton').grid(row=1, column=0, sticky='w', pady=(6, 0))
+            tk.Label(frame, text='隐藏后可通过托盘图标恢复窗口或退出程序', font=self.font_small, bg='#ffffff', fg='#94a3b8').grid(row=2, column=0, sticky='w', pady=(3, 0))
         else:
             tk.Label(frame, text="⚠ 未安装 pystray 库，托盘功能不可用\n请运行: pip install pystray", 
-                    font=('Microsoft YaHei', 9), bg='#ffffff', fg='#dc2626').pack(anchor=tk.W)
+                    font=self.font_small, bg='#ffffff', fg='#dc2626').grid(row=1, column=0, sticky='w', pady=(6, 0))
     
-    def create_status_section(self, parent):
-        frame = tk.Frame(parent, bg='#172033', highlightbackground='#0f172a', 
-                         highlightthickness=1, padx=16, pady=12)
-        frame.pack(fill=tk.X, pady=(0, 10))
-        
-        tk.Label(frame, text="当前状态", font=('Microsoft YaHei', 11, 'bold'),
-                bg='#172033', fg='#e5e7eb').pack(anchor=tk.W, pady=(0, 8))
-        
+    def create_status_section(self, parent, row):
+        frame = tk.Frame(parent, bg='#17202a', highlightbackground='#17202a', highlightthickness=1, padx=14, pady=11)
+        frame.grid(row=row, column=0, sticky='ew', pady=(0, 10))
+        tk.Label(frame, text='运行状态', font=('Microsoft YaHei UI', 10, 'bold'), bg='#17202a', fg='#ffffff').pack(anchor='w', pady=(0, 6))
         self.status_var = tk.StringVar(value="✓ 就绪 - 复制文本后按快捷键开始输入")
         self.status_label = tk.Label(frame, textvariable=self.status_var, 
-                                     font=('Microsoft YaHei', 10), bg='#172033', fg='#a7f3d0',
+                                     font=self.font_small, bg='#17202a', fg='#d7e2ef',
                                      wraplength=460, justify=tk.LEFT)
         self.status_label.pack(anchor=tk.W)
     
-    def create_button_section(self, parent):
-        frame = tk.Frame(parent, bg='#eef2f7')
-        frame.pack(fill=tk.X)
-        
-        self.save_btn = tk.Button(frame, text="保存设置", command=self.save_settings, **self.button_style("success"))
-        self.save_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
-        self.test_btn = tk.Button(frame, text="测试输入", command=self.test_input, **self.button_style("primary"))
-        self.test_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
-        self.stop_btn = tk.Button(frame, text="停止输入", command=self.stop_typing,
-                                  state=tk.DISABLED, **self.button_style("danger"))
-        self.stop_btn.pack(side=tk.LEFT)
-        
+    def create_button_section(self, parent, row):
+        frame = tk.Frame(parent, bg='#f7f8fa')
+        frame.grid(row=row, column=0, sticky='ew')
+        frame.columnconfigure((0, 1), weight=1, uniform='actions')
+        self.save_btn = ttk.Button(frame, text='保存设置', command=self.save_settings, style='Secondary.TButton')
+        self.save_btn.grid(row=0, column=0, sticky='ew', padx=(0, 4))
+        self.test_btn = ttk.Button(frame, text='测试输入', command=self.test_input, style='Primary.TButton')
+        self.test_btn.grid(row=0, column=1, sticky='ew', padx=(4, 0))
+        self.stop_btn = ttk.Button(frame, text='停止输入', command=self.stop_typing, state=tk.DISABLED, style='Danger.TButton')
+        self.stop_btn.grid(row=1, column=0, sticky='ew', padx=(0, 4), pady=(8, 0))
         if HAS_PYSTRAY:
-            hide_btn = tk.Button(frame, text="隐藏到托盘", command=self.hide_to_tray, **self.button_style("muted"))
-            hide_btn.pack(side=tk.RIGHT)
+            ttk.Button(frame, text='隐藏到托盘', command=self.hide_to_tray, style='Secondary.TButton').grid(row=1, column=1, sticky='ew', padx=(4, 0), pady=(8, 0))
     
     def on_random_toggle(self):
         use_random = self.use_random_var.get()
         if use_random:
-            self.min_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
-            self.max_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
-            self.fixed_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
+            self.min_speed_entry.configure(state='normal')
+            self.max_speed_entry.configure(state='normal')
+            self.fixed_speed_entry.configure(state='disabled')
         else:
-            self.min_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
-            self.max_speed_entry.config(state=tk.DISABLED, bg='#e5e7eb', fg='#94a3b8')
-            self.fixed_speed_entry.config(state=tk.NORMAL, bg='#f8fafc', fg='#111827')
+            self.min_speed_entry.configure(state='disabled')
+            self.max_speed_entry.configure(state='disabled')
+            self.fixed_speed_entry.configure(state='normal')
     
     def on_tray_setting_change(self):
         self.config["hide_to_tray"] = self.hide_to_tray_var.get()
@@ -421,6 +418,7 @@ class SimulatedInputApp:
         self.status_var.set(f"✓ 托盘设置已{status}并保存")
     
     def start_set_start_hotkey(self):
+        load_keyboard()
         self.is_setting_hotkey = True
         self.setting_stop_hotkey = False
         self.pressed_keys.clear()
@@ -430,6 +428,7 @@ class SimulatedInputApp:
         self.hook_handle = keyboard.hook(self.on_key_event)
     
     def start_set_stop_hotkey(self):
+        load_keyboard()
         self.is_setting_hotkey = True
         self.setting_stop_hotkey = True
         self.pressed_keys.clear()
@@ -489,6 +488,7 @@ class SimulatedInputApp:
                     self.save_config()
     
     def register_hotkeys(self):
+        load_keyboard()
         try:
             if self.start_hotkey_hook:
                 self.start_hotkey_hook()
@@ -497,7 +497,7 @@ class SimulatedInputApp:
                 self.stop_hotkey_hook()
                 self.stop_hotkey_hook = None
             
-            start_hotkey = self.config.get("hotkey", "alt+v")
+            start_hotkey = self.config.get("hotkey", DEFAULT_CONFIG["hotkey"])
             stop_hotkey = self.config.get("stop_hotkey", "ctrl+a")
             
             self.start_hotkey_hook = keyboard.add_hotkey(
@@ -517,6 +517,7 @@ class SimulatedInputApp:
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("错误", f"注册快捷键失败: {msg}"))
     
     def start_typing(self):
+        load_pyperclip()
         if self.is_typing:
             return
             
@@ -537,6 +538,7 @@ class SimulatedInputApp:
         self.typing_thread.start()
     
     def type_text(self, text):
+        completed = False
         try:
             use_random = self.config.get("use_random_speed", True)
             
@@ -574,13 +576,14 @@ class SimulatedInputApp:
                     delay = fixed_speed / 1000.0
                     
                 time.sleep(delay)
-                
+            completed = self.is_typing
         except Exception as e:
-            self.root.after(0, lambda: self.status_var.set(f"⚠ 输入错误: {str(e)}"))
+            error_message = str(e)
+            self.root.after(0, lambda msg=error_message: self.status_var.set(f"⚠ 输入错误: {msg}"))
         finally:
             self.is_typing = False
             self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
-            if self.is_typing == False:
+            if completed:
                 self.root.after(0, lambda: self.status_var.set("✓ 输入完成"))
     
     def stop_typing(self):
@@ -589,6 +592,7 @@ class SimulatedInputApp:
         self.root.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
     
     def test_input(self):
+        load_pyperclip()
         test_text = "这是一段测试文本，用于测试模拟输入功能。"
         pyperclip.copy(test_text)
         self.status_var.set("✓ 已复制测试文本，请将光标放在输入框中，然后按快捷键")
@@ -615,6 +619,8 @@ class SimulatedInputApp:
             messagebox.showerror("错误", "请输入有效的数字")
     
     def create_tray_icon(self):
+        pystray_module, Image, ImageDraw = load_tray()
+
         def create_image():
             width = 64
             height = 64
@@ -628,16 +634,16 @@ class SimulatedInputApp:
             dc.rectangle([16, 44, 36, 52], fill=color2)
             return image
         
-        return pystray.Icon(
+        return pystray_module.Icon(
             "simulated_input",
             create_image(),
             "模拟输入工具",
-            menu=pystray.Menu(
-                pystray.MenuItem("显示窗口", self.show_window, default=True),
-                pystray.MenuItem("开始输入", self.start_typing),
-                pystray.MenuItem("停止输入", self.stop_typing),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("退出", self.quit_app)
+            menu=pystray_module.Menu(
+                pystray_module.MenuItem("显示窗口", self.show_window, default=True),
+                pystray_module.MenuItem("开始输入", self.start_typing),
+                pystray_module.MenuItem("停止输入", self.stop_typing),
+                pystray_module.Menu.SEPARATOR,
+                pystray_module.MenuItem("退出", self.quit_app)
             )
         )
     
@@ -680,6 +686,28 @@ class SimulatedInputApp:
             self.quit_app()
 
 def main():
+    handle = acquire_instance()
+    if sys.platform == 'win32' and handle is None:
+        return
+    try:
+        if sys.platform == 'win32' and not is_admin():
+            # 提权后的新进程接管互斥锁。
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(handle))
+            handle = None
+            if not run_as_admin():
+                enable_dpi_awareness()
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showwarning('权限不足', '请右键点击程序，选择「以管理员身份运行」', parent=root)
+                root.destroy()
+            return
+        run_app()
+    finally:
+        if handle is not None:
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+def run_app():
+    enable_dpi_awareness()
     root = tk.Tk()
     app = SimulatedInputApp(root)
     root.mainloop()
