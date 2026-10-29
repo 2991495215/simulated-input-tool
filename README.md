@@ -14,7 +14,7 @@
 - 配置自动保存到 `config.json`
 - 单实例运行，再次打开时恢复已有窗口
 - 窗口按字体和显示缩放自动计算尺寸
-- 使用 PyInstaller 打包为 `onedir` 文件夹
+- 使用 PyInstaller 打包为 `onefile` 单文件 EXE
 
 ## 默认快捷键
 
@@ -96,7 +96,7 @@ python main.py
 pyinstaller --clean --noconfirm --distpath release --workpath tmp/build simulated-input-tool.spec
 ```
 
-生成的 `onedir` 产物位于 `release/simulated-input-tool/` 目录，发布时需要完整保留该文件夹。程序入口为其中的 `simulated-input-tool.exe`。
+生成的单文件产物为 `release/simulated-input-tool.exe`，下载后直接运行，无需附带 `_internal` 文件夹。首次使用会在 EXE 同目录生成 `config.json`。
 
 ## 目录说明
 
@@ -106,7 +106,7 @@ pyinstaller --clean --noconfirm --distpath release --workpath tmp/build simulate
 | `requirements.txt` | Python 依赖 |
 | `simulated-input-tool.spec` | 当前打包配置 |
 | `config.json` | 源码运行时的个人设置，保留原位置 |
-| `release/simulated-input-tool/` | 当前可用版本，日常运行使用此处 |
+| `release/simulated-input-tool.exe` | 单文件程序，日常运行使用此处 |
 | `tests/test_app.py` | 布局与单实例自动测试 |
 | `tests/manual/` | 手动键盘测试，会向当前窗口发送字符 |
 | `archive/` | 旧版程序、旧打包配置与历史构建文件，仅作历史留存 |
@@ -133,4 +133,4 @@ python -B -m unittest discover -s tests -p test_app.py -v
 - 输入逻辑是逐字符发送，不是一次性粘贴。
 - 快捷键尽量避开系统或常用软件快捷键。
 - `Ctrl + A` 默认用于停止输入，可能会和“全选”冲突，可以在界面中改成其他组合键。
-- 当前默认使用 `onedir`，启动时无需先解包，适合这个需要快速启动的小工具；发布时需要完整保留 `release/simulated-input-tool/` 文件夹。
+- 当前默认使用 `onefile`，发布时只需分发 EXE；启动时会先解包依赖，因此可能比文件夹版启动慢。

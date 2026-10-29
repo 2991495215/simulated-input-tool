@@ -1,4 +1,5 @@
 import ctypes
+import os
 import subprocess
 import sys
 import tkinter as tk
@@ -11,6 +12,22 @@ import main
 
 
 class AppTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows elevation')
+    def test_frozen_elevation_resets_environment(self):
+        for result in (42, 5, OSError('cancelled')):
+            with self.subTest(result=result), patch.object(sys, 'frozen', True, create=True), patch.dict(
+                os.environ, {'PYINSTALLER_RESET_ENVIRONMENT': 'original'}
+            ):
+                def elevate(*args):
+                    self.assertEqual(os.environ['PYINSTALLER_RESET_ENVIRONMENT'], '1')
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+
+                with patch.object(ctypes.windll.shell32, 'ShellExecuteW', side_effect=elevate):
+                    self.assertEqual(main.run_as_admin(), result == 42)
+                self.assertEqual(os.environ['PYINSTALLER_RESET_ENVIRONMENT'], 'original')
+
     def test_layout_at_common_scales(self):
         main.enable_dpi_awareness()
         for scale in (1, 1.25, 1.5, 2):

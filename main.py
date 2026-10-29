@@ -25,10 +25,19 @@ def run_as_admin():
     if sys.platform == 'win32':
         script = os.path.abspath(sys.argv[0])
         params = subprocess.list2cmdline(sys.argv[1:] if getattr(sys, 'frozen', False) else [script] + sys.argv[1:])
+        reset_environment = os.environ.get('PYINSTALLER_RESET_ENVIRONMENT')
         try:
+            if getattr(sys, 'frozen', False):
+                # 提权后的独立进程需要自己的解包目录，避免原进程退出后依赖被清理。
+                os.environ['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
             return ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1) > 32
         except:
             return False
+        finally:
+            if reset_environment is None:
+                os.environ.pop('PYINSTALLER_RESET_ENVIRONMENT', None)
+            else:
+                os.environ['PYINSTALLER_RESET_ENVIRONMENT'] = reset_environment
     return False
 
 import tkinter as tk
